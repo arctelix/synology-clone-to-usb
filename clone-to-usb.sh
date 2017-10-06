@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # Initiates an rsync session to backup volume1 to volumeUSB1
 # You can pass any valid rsync options or a custom option below
@@ -10,22 +10,24 @@ Use any valid rsync options or the optins defined below:
 --log-diff      Write all rsync changes to file (uses default file name or provide custom)
                 * this is the default behavior
 --log-all       Write all output to file (uses default file or provide custom)
---target-root   Modify the target root
---target-dir    Modify the target directory
---target        Modify the full target path
+--target        Modify the target path
+--source        Modify the source path
 --silent        Only write to files, do not output to tty
 --verbose       Write all rsync output to tty, not just diff
+--two-way       Sync both directions, adds target -> source in addition to source -> target
 "
 
 # CONFIG
 diff_file="./rsync_diff.txt"
-target_root="/volumeUSB1/usbshare"
-target_dir="SynoClone"
-target=""
+target_dir="/volumeUSB1/usbshare/SynoClone/"
+source_dir="/volume1/"
 silent=""
 dry_run=""
 log_file=""
 options=""
+output_diff="/dev/tty"
+output_all="/dev/null"
+two_way=""
 
 # OPTIONS
 
@@ -42,6 +44,7 @@ while [ $# -gt 0 ];do
         --help) echo "$help" && exit;;
       --silent) silent=true;;
      --verbose) verbose=true;;
+     --two-way) two_way=true;;
      --dry-run) dry_run=true
                 add_option "$1"
                 ;;
@@ -58,26 +61,18 @@ while [ $# -gt 0 ];do
                 fi
                 ;;
       --target) if [ "$2" ] && [[ ! $2 =~ ^- ]]; then
-                    target="$2"
-                    shift
-                else
-                    echo "target requires a deriectory"
-                    exit
-                fi
-                ;;
- --target-root) if [ "$2" ] && [[ ! $2 =~ ^- ]]; then
-                    target_root="$2"
-                    shift
-                else
-                    echo "target_root requires a deriectory"
-                    exit
-                fi
-                ;;
-  --target-dir) if [ "$2" ] && [[ ! $2 =~ ^- ]]; then
                     target_dir="$2"
                     shift
                 else
-                    echo "target_dir requires a deriectory"
+                    echo "target requires an argument"
+                    exit
+                fi
+                ;;
+      --source) if [ "$2" ] && [[ ! $2 =~ ^- ]]; then
+                    source_dir="$2"
+                    shift
+                else
+                    echo "source requires an argument"
                     exit
                 fi
                 ;;
@@ -87,8 +82,6 @@ while [ $# -gt 0 ];do
     shift
 done
 
-target="${target_root}/${target_dir}/"
-
 if [ "$dry_run" ]; then
   echo "RUNNING RSYNC TO USB (** DRY RUN **)"
 else
@@ -97,27 +90,44 @@ fi
 
 # Modify screen output
 if [ "$verbose" ]; then
-  output="/dev/tty"
+  output_all="/dev/tty"
   output_diff="/dev/null"
 fi
 
 if [ "$silent" ]; then
   echo " silent mode : see diff file for changes"
-  output="/dev/null"
+  output_all="/dev/null"
   output_diff="/dev/null"
 fi
 
 # Add files to output
-output="$log_file $output"
-output_diff="$diff_file $output_diff"
+if [ "$log_file" ]; then
+  output_all="$output_all $log_file"
+fi
 
-
-echo " target    : $target"
-echo " log all   : $output"
-echo " log diff  : $output_diff"
+# Ouptut config to screen
+echo " source    : $source_dir"
+echo " target    : $target_dir"
+if [ "$output_all" ]; then
+  echo " log all   : $output_all"
+fi
+if [ "$output_diff" ]; then
+  echo " log diff  : $output_diff $diff_file"
+fi
 echo " options   : $options"
 
-# RUN RSYNC COMMAND
-sudo rsync --archive --progress --verbose --inplace --itemize-changes \
---exclude '@*' --exclude 'aquota*' --exclude 'synoquota*' --exclude '*.vsmeta' --exclude '.DS_Store' \
-"$options" /volume1/ "$target" | tee $output | grep --line-buffered '^>\|^<' | tee $output_diff
+# RUN RSYNC COMMAND (syno to usb)
+rsync --archive --progress --verbose --inplace --itemize-changes --delete \
+--exclude '@*' --exclude 'aquota*' --exclude 'synoquota*' --exclude '*.vsmeta' --exclude '.DS_Store' --exclude '#recycle/*' \
+$options "$source_dir" "$target_dir" | tee $output_all | grep --line-buffered '^>\|^<\|^*deleting' | tee $diff_file > $output_diff
+
+echo "Finished $source_dir -> $target_dir"
+
+[ ! "$two_way"] && exit
+
+# RUN RSYNC COMMAND (usb to syno)
+rsync --archive --progress --verbose --inplace --itemize-changes --delete \
+--exclude '@*' --exclude 'aquota*' --exclude 'synoquota*' --exclude '*.vsmeta' --exclude '.DS_Store' --exclude '#recycle/*' \
+$options "$target_dir" "$source_dir" | tee $output_all | grep --line-buffered '^>\|^<\|^*deleting' | tee $diff_file > $output_diff
+
+echo "Finished $target_dir -> $source_dir"
